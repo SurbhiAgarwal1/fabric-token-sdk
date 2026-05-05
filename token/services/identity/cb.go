@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+const (
+	defaultThreshold = 5
+	defaultCooldown  = 30 * time.Second
+)
+
 // CircuitBreaker implements a lightweight in-memory circuit breaker.
 type CircuitBreaker struct {
 	sync.RWMutex
@@ -33,10 +38,10 @@ type CircuitBreakerConfig struct {
 // NewCircuitBreaker returns a new instance of CircuitBreaker with the provided configuration.
 func NewCircuitBreaker(config CircuitBreakerConfig) *CircuitBreaker {
 	if config.Threshold <= 0 {
-		config.Threshold = 5
+		config.Threshold = defaultThreshold
 	}
 	if config.Cooldown <= 0 {
-		config.Cooldown = 30 * time.Second
+		config.Cooldown = defaultCooldown
 	}
 	return &CircuitBreaker{
 		threshold: config.Threshold,
@@ -45,39 +50,39 @@ func NewCircuitBreaker(config CircuitBreakerConfig) *CircuitBreaker {
 }
 
 // Allow returns true if the circuit breaker allows the request to proceed.
-func (cb *CircuitBreaker) Allow() bool {
-	cb.RLock()
-	if !cb.open {
-		cb.RUnlock()
+func (circuitBreaker *CircuitBreaker) Allow() bool {
+	circuitBreaker.RLock()
+	if !circuitBreaker.open {
+		circuitBreaker.RUnlock()
 		return true
 	}
-	cb.RUnlock()
+	circuitBreaker.RUnlock()
 
-	cb.Lock()
-	defer cb.Unlock()
-	if time.Since(cb.lastFailure) > cb.cooldown {
-		cb.open = false
-		atomic.StoreInt64(&cb.failureCount, 0)
+	circuitBreaker.Lock()
+	defer circuitBreaker.Unlock()
+	if time.Since(circuitBreaker.lastFailure) > circuitBreaker.cooldown {
+		circuitBreaker.open = false
+		atomic.StoreInt64(&circuitBreaker.failureCount, 0)
 		return true
 	}
 	return false
 }
 
 // RecordFailure increments the failure count and opens the circuit if the threshold is reached.
-func (cb *CircuitBreaker) RecordFailure() {
-	count := atomic.AddInt64(&cb.failureCount, 1)
-	if count >= cb.threshold {
-		cb.Lock()
-		cb.open = true
-		cb.lastFailure = time.Now()
-		cb.Unlock()
+func (circuitBreaker *CircuitBreaker) RecordFailure() {
+	count := atomic.AddInt64(&circuitBreaker.failureCount, 1)
+	if count >= circuitBreaker.threshold {
+		circuitBreaker.Lock()
+		circuitBreaker.open = true
+		circuitBreaker.lastFailure = time.Now()
+		circuitBreaker.Unlock()
 	}
 }
 
 // RecordSuccess resets the failure count and closes the circuit.
-func (cb *CircuitBreaker) RecordSuccess() {
-	atomic.StoreInt64(&cb.failureCount, 0)
-	cb.Lock()
-	cb.open = false
-	cb.Unlock()
+func (circuitBreaker *CircuitBreaker) RecordSuccess() {
+	atomic.StoreInt64(&circuitBreaker.failureCount, 0)
+	circuitBreaker.Lock()
+	circuitBreaker.open = false
+	circuitBreaker.Unlock()
 }

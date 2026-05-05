@@ -93,31 +93,31 @@ func (m *mockMetricsProvider) NewHistogram(opts metrics.HistogramOpts) metrics.H
 }
 
 func TestCircuitBreaker(t *testing.T) {
-	cb := identity.NewCircuitBreaker(identity.CircuitBreakerConfig{
+	circuitBreaker := identity.NewCircuitBreaker(identity.CircuitBreakerConfig{
 		Threshold: 2,
 		Cooldown:  100 * time.Millisecond,
 	})
 
 	// Initial state: closed
-	assert.True(t, cb.Allow())
+	assert.True(t, circuitBreaker.Allow())
 
 	// Record one failure
-	cb.RecordFailure()
-	assert.True(t, cb.Allow())
+	circuitBreaker.RecordFailure()
+	assert.True(t, circuitBreaker.Allow())
 
 	// Record second failure -> opens
-	cb.RecordFailure()
-	assert.False(t, cb.Allow())
+	circuitBreaker.RecordFailure()
+	assert.False(t, circuitBreaker.Allow())
 
 	// Wait for cooldown
 	time.Sleep(150 * time.Millisecond)
-	assert.True(t, cb.Allow())
+	assert.True(t, circuitBreaker.Allow())
 
 	// Record success -> resets
-	cb.RecordFailure()
-	cb.RecordSuccess()
-	cb.RecordFailure()
-	assert.True(t, cb.Allow())
+	circuitBreaker.RecordFailure()
+	circuitBreaker.RecordSuccess()
+	circuitBreaker.RecordFailure()
+	assert.True(t, circuitBreaker.Allow())
 }
 
 func TestProviderObservability(t *testing.T) {
@@ -137,7 +137,7 @@ func TestProviderObservability(t *testing.T) {
 	// First call fails
 	err := p.RegisterRecipientData(ctx, data)
 	assert.Error(t, err)
-	assert.Equal(t, "storage error", err.Error())
+	assert.Contains(t, err.Error(), "storage error")
 
 	// Verify metrics
 	assert.Equal(t, 1.0, metricsProvider.Counters["identity_requests_total"].value)

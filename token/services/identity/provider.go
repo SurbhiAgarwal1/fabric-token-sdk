@@ -8,6 +8,7 @@ package identity
 
 import (
 	"context"
+	"fmt"
 	"runtime/debug"
 	"slices"
 	"time"
@@ -93,7 +94,7 @@ type Provider struct {
 	signers   cache[*SignerEntry]
 
 	metrics *IdentityMetrics
-	cb      *CircuitBreaker
+	circuitBreaker *CircuitBreaker
 }
 
 // Option is a functional option for the identity provider.
@@ -109,7 +110,7 @@ func WithMetrics(p metrics.Provider) Option {
 // WithCircuitBreaker returns an option to configure the identity provider with the provided circuit breaker configuration.
 func WithCircuitBreaker(config CircuitBreakerConfig) Option {
 	return func(pr *Provider) {
-		pr.cb = NewCircuitBreaker(config)
+		pr.circuitBreaker = NewCircuitBreaker(config)
 	}
 }
 
@@ -147,11 +148,15 @@ func (p *Provider) RegisterRecipientData(ctx context.Context, data *driver.Recip
 	start := time.Now()
 	defer func() { p.recordMetrics(start, err) }()
 
-	if p.cb != nil && !p.cb.Allow() {
+	if p.circuitBreaker != nil && !p.circuitBreaker.Allow() {
 		return errors.New("back-pressure: service temporarily overloaded, retry later")
 	}
 
-	return p.storage.StoreIdentityData(ctx, data.Identity, data.AuditInfo, data.TokenMetadata, data.TokenMetadataAuditInfo)
+	err = p.storage.StoreIdentityData(ctx, data.Identity, data.AuditInfo, data.TokenMetadata, data.TokenMetadataAuditInfo)
+	if err != nil {
+		return fmt.Errorf("failed to store identity data: %w", err)
+	}
+	return nil
 }
 
 // RegisterSigner registers a Signer and a Verifier for passed identity.
@@ -166,7 +171,7 @@ func (p *Provider) RegisterSigner(ctx context.Context, identity driver.Identity,
 	start := time.Now()
 	defer func() { p.recordMetrics(start, err) }()
 
-	if p.cb != nil && !p.cb.Allow() {
+	if p.circuitBreaker != nil && !p.circuitBreaker.Allow() {
 		return errors.New("back-pressure: service temporarily overloaded, retry later")
 	}
 
@@ -179,7 +184,11 @@ func (p *Provider) RegisterSigner(ctx context.Context, identity driver.Identity,
 		Ephemeral:  ephemeral,
 	}
 
-	return p.RegisterIdentityDescriptor(ctx, identityDescriptor, nil)
+	err = p.RegisterIdentityDescriptor(ctx, identityDescriptor, nil)
+	if err != nil {
+		return fmt.Errorf("failed to register identity descriptor: %w", err)
+	}
+	return nil
 }
 
 // AreMe returns the hashes of the passed identities that have a signer registered before.
@@ -243,11 +252,15 @@ func (p *Provider) GetAuditInfo(ctx context.Context, identity driver.Identity) (
 	start := time.Now()
 	defer func() { p.recordMetrics(start, err) }()
 
-	if p.cb != nil && !p.cb.Allow() {
+	if p.circuitBreaker != nil && !p.circuitBreaker.Allow() {
 		return nil, errors.New("back-pressure: service temporarily overloaded, retry later")
 	}
 
-	return p.storage.GetAuditInfo(ctx, identity)
+	res, err = p.storage.GetAuditInfo(ctx, identity)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get audit info: %w", err)
+	}
+	return res, nil
 }
 
 // GetSigner returns a Signer for passed identity.
@@ -264,7 +277,7 @@ func (p *Provider) GetSigner(ctx context.Context, identity driver.Identity) (sig
 	start := time.Now()
 	defer func() { p.recordMetrics(start, err) }()
 
-	if p.cb != nil && !p.cb.Allow() {
+	if p.circuitBreaker != nil && !p.circuitBreaker.Allow() {
 		return nil, errors.New("back-pressure: service temporarily overloaded, retry later")
 	}
 
@@ -275,7 +288,7 @@ func (p *Provider) GetSigner(ctx context.Context, identity driver.Identity) (sig
 	}()
 	signer, err = p.getSigner(ctx, identity, idHash)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to get signer for identity [%s], it is neither register nor deserialazable", identity.String())
+		return nil, fmt.Errorf("failed to get signer for identity [%s], it is neither register nor deserialazable: %w", identity.String(), err)
 	}
 	found = true
 
@@ -292,11 +305,15 @@ func (p *Provider) GetEIDAndRH(ctx context.Context, identity driver.Identity, au
 	start := time.Now()
 	defer func() { p.recordMetrics(start, err) }()
 
-	if p.cb != nil && !p.cb.Allow() {
+	if p.circuitBreaker != nil && !p.circuitBreaker.Allow() {
 		return "", "", errors.New("back-pressure: service temporarily overloaded, retry later")
 	}
 
-	return p.enrollmentIDUnmarshaler.GetEIDAndRH(ctx, identity, auditInfo)
+	eid, rh, err = p.enrollmentIDUnmarshaler.GetEIDAndRH(ctx, identity, auditInfo)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to get EID and RH: %w", err)
+	}
+	return eid, rh, nil
 }
 
 // GetEnrollmentID extracts the enrollment ID from the passed audit info
@@ -309,11 +326,15 @@ func (p *Provider) GetEnrollmentID(ctx context.Context, identity driver.Identity
 	start := time.Now()
 	defer func() { p.recordMetrics(start, err) }()
 
-	if p.cb != nil && !p.cb.Allow() {
+	if p.circuitBreaker != nil && !p.circuitBreaker.Allow() {
 		return "", errors.New("back-pressure: service temporarily overloaded, retry later")
 	}
 
-	return p.enrollmentIDUnmarshaler.GetEnrollmentID(ctx, identity, auditInfo)
+	eid, err = p.enrollmentIDUnmarshaler.GetEnrollmentID(ctx, identity, auditInfo)
+	if err != nil {
+		return "", fmt.Errorf("failed to get enrollment ID: %w", err)
+	}
+	return eid, nil
 }
 
 // GetRevocationHandler extracts the revocation handler from the passed audit info
@@ -326,11 +347,15 @@ func (p *Provider) GetRevocationHandler(ctx context.Context, identity driver.Ide
 	start := time.Now()
 	defer func() { p.recordMetrics(start, err) }()
 
-	if p.cb != nil && !p.cb.Allow() {
+	if p.circuitBreaker != nil && !p.circuitBreaker.Allow() {
 		return "", errors.New("back-pressure: service temporarily overloaded, retry later")
 	}
 
-	return p.enrollmentIDUnmarshaler.GetRevocationHandler(ctx, identity, auditInfo)
+	rh, err = p.enrollmentIDUnmarshaler.GetRevocationHandler(ctx, identity, auditInfo)
+	if err != nil {
+		return "", fmt.Errorf("failed to get revocation handler: %w", err)
+	}
+	return rh, nil
 }
 
 // Bind binds longTerm to the passed ephemeral identities.
@@ -343,7 +368,7 @@ func (p *Provider) Bind(ctx context.Context, longTerm driver.Identity, ephemeral
 	start := time.Now()
 	defer func() { p.recordMetrics(start, err) }()
 
-	if p.cb != nil && !p.cb.Allow() {
+	if p.circuitBreaker != nil && !p.circuitBreaker.Allow() {
 		return errors.New("back-pressure: service temporarily overloaded, retry later")
 	}
 
@@ -353,7 +378,7 @@ func (p *Provider) Bind(ctx context.Context, longTerm driver.Identity, ephemeral
 			continue
 		}
 		if err := p.Binder.Bind(ctx, longTerm, identity); err != nil {
-			return err
+			return fmt.Errorf("failed to bind identity: %w", err)
 		}
 	}
 
@@ -370,7 +395,7 @@ func (p *Provider) RegisterRecipientIdentity(ctx context.Context, id driver.Iden
 	start := time.Now()
 	defer func() { p.recordMetrics(start, err) }()
 
-	if p.cb != nil && !p.cb.Allow() {
+	if p.circuitBreaker != nil && !p.circuitBreaker.Allow() {
 		return errors.New("back-pressure: service temporarily overloaded, retry later")
 	}
 
@@ -406,14 +431,14 @@ func (p *Provider) RegisterIdentityDescriptor(ctx context.Context, identityDescr
 	start := time.Now()
 	defer func() { p.recordMetrics(start, err) }()
 
-	if p.cb != nil && !p.cb.Allow() {
+	if p.circuitBreaker != nil && !p.circuitBreaker.Allow() {
 		return errors.New("back-pressure: service temporarily overloaded, retry later")
 	}
 
 	// register in the Storage
 	if !identityDescriptor.Ephemeral {
 		if err := p.storage.RegisterIdentityDescriptor(ctx, identityDescriptor, alias); err != nil {
-			return errors.Wrapf(err, "failed to register identity descriptor")
+			return fmt.Errorf("failed to register identity descriptor: %w", err)
 		}
 	}
 
@@ -432,11 +457,11 @@ func (p *Provider) recordMetrics(start time.Time, err error) {
 			p.metrics.Errors.Add(1)
 		}
 	}
-	if p.cb != nil {
+	if p.circuitBreaker != nil {
 		if err != nil {
-			p.cb.RecordFailure()
+			p.circuitBreaker.RecordFailure()
 		} else {
-			p.cb.RecordSuccess()
+			p.circuitBreaker.RecordSuccess()
 		}
 	}
 }
