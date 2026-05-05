@@ -93,7 +93,7 @@ type Provider struct {
 	isMeCache cache[bool]
 	signers   cache[*SignerEntry]
 
-	metrics *IdentityMetrics
+	metrics        *IdentityMetrics
 	circuitBreaker *CircuitBreaker
 }
 
