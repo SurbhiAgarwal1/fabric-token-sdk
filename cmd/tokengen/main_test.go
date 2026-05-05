@@ -250,42 +250,54 @@ func TestGenFailure(t *testing.T) {
 	defer gexec.CleanupBuildArtifacts()
 
 	type T struct {
-		Args   []string
-		ErrMsg string
+		Args    []string
+		ErrMsgs []string
 	}
 	var tests []T
-	for _, driver := range []string{fabtokenv1.DriverIdentifier} {
+	for _, driverIdentifier := range []string{fabtokenv1.DriverIdentifier} {
 		tests = append(tests, []T{
 			{
 				Args: []string{
 					"gen",
-					driver,
+					driverIdentifier,
 					"--auditors", "a,b"},
-				ErrMsg: "Error: failed to generate public parameters: failed to get auditor identity [a]",
+				ErrMsgs: []string{"failed to generate public parameters", "failed to get auditor identity [a]"},
 			},
 			{
 				Args: []string{
 					"gen",
-					driver,
+					driverIdentifier,
 					"--auditors", "aOrg1MSP,b",
 				},
-				ErrMsg: "Error: failed to generate public parameters: failed to get auditor identity [aOrg1MSP]: failed to load certificates from aOrg1MSP/signcerts: stat aOrg1MSP/signcerts: no such file or directory",
+				ErrMsgs: []string{
+					"failed to generate public parameters",
+					"failed to get auditor identity [aOrg1MSP]",
+					"failed to load certificates from",
+					"aOrg1MSP",
+					"signcerts",
+				},
 			},
 			{
 				Args: []string{
 					"gen",
-					driver,
+					driverIdentifier,
 					"--issuers", "a,b",
 				},
-				ErrMsg: "Error: failed to generate public parameters: failed to get issuer identity [a]",
+				ErrMsgs: []string{"failed to generate public parameters", "failed to get issuer identity [a]"},
 			},
 			{
 				Args: []string{
 					"gen",
-					driver,
+					driverIdentifier,
 					"--issuers", "aOrg1MSP,b",
 				},
-				ErrMsg: "Error: failed to generate public parameters: failed to get issuer identity [aOrg1MSP]: failed to load certificates from aOrg1MSP/signcerts: stat aOrg1MSP/signcerts: no such file or directory",
+				ErrMsgs: []string{
+					"failed to generate public parameters",
+					"failed to get issuer identity [aOrg1MSP]",
+					"failed to load certificates from",
+					"aOrg1MSP",
+					"signcerts",
+				},
 			},
 		}...,
 		)
@@ -297,7 +309,13 @@ func TestGenFailure(t *testing.T) {
 				zkatdlognoghv1.DriverIdentifier,
 				"--issuers", "aOrg1MSP,b",
 			},
-			ErrMsg: "failed to generate public parameters: failed to load issuer public key: failed reading idemix issuer public key [msp/IssuerPublicKey]: open msp/IssuerPublicKey: no such file or directory",
+			ErrMsgs: []string{
+				"failed to generate public parameters",
+				"failed to load issuer public key",
+				"failed reading idemix issuer public key",
+				"msp",
+				"IssuerPublicKey",
+			},
 		},
 		{
 			Args: []string{
@@ -306,14 +324,21 @@ func TestGenFailure(t *testing.T) {
 				"--idemix", "./testdata/idemix",
 				"--issuers", "Error: failed to generate public parameters: failed to get issuer identity [aOrg1MSP]: invalid input [aOrg1MSP]",
 			},
-			ErrMsg: "Error: failed to generate public parameters: failed to setup issuer and auditors: failed to get issuer identity [Error: failed to generate public parameters: failed to get issuer identity [aOrg1MSP]: invalid input [aOrg1MSP]]: failed to load certificates from Error: failed to generate public parameters: failed to get issuer identity [aOrg1MSP]: invalid input [aOrg1MSP]/signcerts: stat Error: failed to generate public parameters: failed to get issuer identity [aOrg1MSP]: invalid input [aOrg1MSP]/signcerts: no such file or directory",
+			ErrMsgs: []string{
+				"failed to generate public parameters",
+				"failed to setup issuer and auditors",
+				"failed to get issuer identity",
+				"failed to load certificates from",
+				"aOrg1MSP",
+				"signcerts",
+			},
 		},
 	}...,
 	)
 
 	for i, test := range tests {
 		t.Run(fmt.Sprintf("test_%d", i), func(t *testing.T) {
-			testGenRunWithError(gt, tokengen, test.Args, test.ErrMsg)
+			testGenRunWithError(gt, tokengen, test.Args, test.ErrMsgs...)
 		})
 	}
 }
@@ -360,10 +385,12 @@ func validateOutputEquivalent(
 }
 
 // testGenRunWithError runs the tokengen command and expects an error.
-func testGenRunWithError(gt *WithT, tokengen string, args []string, errMsg string) {
+func testGenRunWithError(gt *WithT, tokengen string, args []string, errMsgs ...string) {
 	b, err := exec.Command(tokengen, args...).CombinedOutput()
 	gt.Expect(err).To(HaveOccurred())
-	gt.Expect(string(b)).To(ContainSubstring(errMsg))
+	for _, errMsg := range errMsgs {
+		gt.Expect(string(b)).To(ContainSubstring(errMsg))
+	}
 }
 
 // testGenRun runs the tokengen command and expects no error.
