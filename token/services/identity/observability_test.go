@@ -20,74 +20,74 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type MockCounter struct {
+type mockCounter struct {
 	value float64
 }
 
-func (c *MockCounter) Add(delta float64) {
+func (c *mockCounter) Add(delta float64) {
 	c.value += delta
 }
 
-func (c *MockCounter) With(labelValues ...string) metrics.Counter {
+func (c *mockCounter) With(labelValues ...string) metrics.Counter {
 	return c
 }
 
-type MockGauge struct {
+type mockGauge struct {
 	value float64
 }
 
-func (g *MockGauge) Add(delta float64) {
+func (g *mockGauge) Add(delta float64) {
 	g.value += delta
 }
 
-func (g *MockGauge) Set(value float64) {
+func (g *mockGauge) Set(value float64) {
 	g.value = value
 }
 
-func (g *MockGauge) With(labelValues ...string) metrics.Gauge {
+func (g *mockGauge) With(labelValues ...string) metrics.Gauge {
 	return g
 }
 
-type MockHistogram struct {
+type mockHistogram struct {
 	observations []float64
 }
 
-func (h *MockHistogram) Observe(value float64) {
+func (h *mockHistogram) Observe(value float64) {
 	h.observations = append(h.observations, value)
 }
 
-func (h *MockHistogram) With(labelValues ...string) metrics.Histogram {
+func (h *mockHistogram) With(labelValues ...string) metrics.Histogram {
 	return h
 }
 
-type MockMetricsProvider struct {
-	Counters   map[string]*MockCounter
-	Gauges     map[string]*MockGauge
-	Histograms map[string]*MockHistogram
+type mockMetricsProvider struct {
+	Counters   map[string]*mockCounter
+	Gauges     map[string]*mockGauge
+	Histograms map[string]*mockHistogram
 }
 
-func NewMockMetricsProvider() *MockMetricsProvider {
-	return &MockMetricsProvider{
-		Counters:   make(map[string]*MockCounter),
-		Gauges:     make(map[string]*MockGauge),
-		Histograms: make(map[string]*MockHistogram),
+func newMockMetricsProvider() *mockMetricsProvider {
+	return &mockMetricsProvider{
+		Counters:   make(map[string]*mockCounter),
+		Gauges:     make(map[string]*mockGauge),
+		Histograms: make(map[string]*mockHistogram),
 	}
 }
 
-func (m *MockMetricsProvider) NewCounter(opts metrics.CounterOpts) metrics.Counter {
-	c := &MockCounter{}
+func (m *mockMetricsProvider) NewCounter(opts metrics.CounterOpts) metrics.Counter {
+	c := &mockCounter{}
 	m.Counters[opts.Name] = c
 	return c
 }
 
-func (m *MockMetricsProvider) NewGauge(opts metrics.GaugeOpts) metrics.Gauge {
-	g := &MockGauge{}
+func (m *mockMetricsProvider) NewGauge(opts metrics.GaugeOpts) metrics.Gauge {
+	g := &mockGauge{}
 	m.Gauges[opts.Name] = g
 	return g
 }
 
-func (m *MockMetricsProvider) NewHistogram(opts metrics.HistogramOpts) metrics.Histogram {
-	h := &MockHistogram{}
+func (m *mockMetricsProvider) NewHistogram(opts metrics.HistogramOpts) metrics.Histogram {
+	h := &mockHistogram{}
 	m.Histograms[opts.Name] = h
 	return h
 }
@@ -122,7 +122,7 @@ func TestCircuitBreaker(t *testing.T) {
 
 func TestProviderObservability(t *testing.T) {
 	storage := &mock.Storage{}
-	metricsProvider := NewMockMetricsProvider()
+	metricsProvider := newMockMetricsProvider()
 	p := identity.NewProvider(logging.MustGetLogger(), storage, nil, nil, nil,
 		identity.WithMetrics(metricsProvider),
 		identity.WithCircuitBreaker(identity.CircuitBreakerConfig{Threshold: 1, Cooldown: time.Hour}),

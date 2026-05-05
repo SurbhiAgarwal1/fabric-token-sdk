@@ -12,6 +12,7 @@ import (
 	"time"
 )
 
+// CircuitBreaker implements a lightweight in-memory circuit breaker.
 type CircuitBreaker struct {
 	sync.RWMutex
 	failureCount int64
@@ -21,11 +22,15 @@ type CircuitBreaker struct {
 	cooldown     time.Duration
 }
 
+// CircuitBreakerConfig contains the configuration for the CircuitBreaker.
 type CircuitBreakerConfig struct {
+	// Threshold is the number of failures after which the circuit opens.
 	Threshold int64
-	Cooldown  time.Duration
+	// Cooldown is the duration after which the circuit closes automatically.
+	Cooldown time.Duration
 }
 
+// NewCircuitBreaker returns a new instance of CircuitBreaker with the provided configuration.
 func NewCircuitBreaker(config CircuitBreakerConfig) *CircuitBreaker {
 	if config.Threshold <= 0 {
 		config.Threshold = 5
@@ -39,6 +44,7 @@ func NewCircuitBreaker(config CircuitBreakerConfig) *CircuitBreaker {
 	}
 }
 
+// Allow returns true if the circuit breaker allows the request to proceed.
 func (cb *CircuitBreaker) Allow() bool {
 	cb.RLock()
 	if !cb.open {
@@ -57,6 +63,7 @@ func (cb *CircuitBreaker) Allow() bool {
 	return false
 }
 
+// RecordFailure increments the failure count and opens the circuit if the threshold is reached.
 func (cb *CircuitBreaker) RecordFailure() {
 	count := atomic.AddInt64(&cb.failureCount, 1)
 	if count >= cb.threshold {
@@ -67,6 +74,7 @@ func (cb *CircuitBreaker) RecordFailure() {
 	}
 }
 
+// RecordSuccess resets the failure count and closes the circuit.
 func (cb *CircuitBreaker) RecordSuccess() {
 	atomic.StoreInt64(&cb.failureCount, 0)
 	cb.Lock()

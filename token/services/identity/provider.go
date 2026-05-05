@@ -96,14 +96,17 @@ type Provider struct {
 	cb      *CircuitBreaker
 }
 
+// Option is a functional option for the identity provider.
 type Option func(*Provider)
 
+// WithMetrics returns an option to configure the identity provider with the provided metrics provider.
 func WithMetrics(p metrics.Provider) Option {
 	return func(pr *Provider) {
 		pr.metrics = NewIdentityMetrics(p)
 	}
 }
 
+// WithCircuitBreaker returns an option to configure the identity provider with the provided circuit breaker configuration.
 func WithCircuitBreaker(config CircuitBreakerConfig) Option {
 	return func(pr *Provider) {
 		pr.cb = NewCircuitBreaker(config)

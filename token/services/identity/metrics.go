@@ -10,13 +10,19 @@ import (
 	"github.com/hyperledger-labs/fabric-smart-client/platform/view/services/metrics"
 )
 
+// IdentityMetrics contains the metrics for the identity service.
 type IdentityMetrics struct {
+	// Requests tracks the total number of identity requests.
 	Requests metrics.Counter
-	Errors   metrics.Counter
-	Latency  metrics.Histogram
+	// Errors tracks the total number of identity errors.
+	Errors metrics.Counter
+	// Latency tracks the identity request latency in milliseconds.
+	Latency metrics.Histogram
+	// InFlight tracks the number of in-flight identity requests.
 	InFlight metrics.Gauge
 }
 
+// NewIdentityMetrics returns a new instance of IdentityMetrics using the provided metrics provider.
 func NewIdentityMetrics(p metrics.Provider) *IdentityMetrics {
 	if p == nil {
 		return nil
