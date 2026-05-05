@@ -10,10 +10,12 @@ import (
 	"context"
 	"runtime/debug"
 	"slices"
+	"time"
 
 	"github.com/hyperledger-labs/fabric-smart-client/pkg/utils/errors"
 	"github.com/hyperledger-labs/fabric-smart-client/platform/common/utils/cache/secondcache"
 	"github.com/hyperledger-labs/fabric-smart-client/platform/common/utils/collections"
+	"github.com/hyperledger-labs/fabric-smart-client/platform/view/services/metrics"
 	"github.com/hyperledger-labs/fabric-token-sdk/token/driver"
 	idriver "github.com/hyperledger-labs/fabric-token-sdk/token/services/identity/driver"
 	"github.com/hyperledger-labs/fabric-token-sdk/token/services/logging"
@@ -89,6 +91,23 @@ type Provider struct {
 
 	isMeCache cache[bool]
 	signers   cache[*SignerEntry]
+
+	metrics *IdentityMetrics
+	cb      *CircuitBreaker
+}
+
+type Option func(*Provider)
+
+func WithMetrics(p metrics.Provider) Option {
+	return func(pr *Provider) {
+		pr.metrics = NewIdentityMetrics(p)
+	}
+}
+
+func WithCircuitBreaker(config CircuitBreakerConfig) Option {
+	return func(pr *Provider) {
+		pr.cb = NewCircuitBreaker(config)
+	}
 }
 
 // NewProvider returns a new instance of Provider
@@ -98,8 +117,9 @@ func NewProvider(
 	deserializer Deserializer,
 	binder NetworkBinderService,
 	enrollmentIDUnmarshaler EnrollmentIDUnmarshaler,
+	opts ...Option,
 ) *Provider {
-	return &Provider{
+	p := &Provider{
 		Logger:                  logger,
 		Binder:                  binder,
 		enrollmentIDUnmarshaler: enrollmentIDUnmarshaler,
@@ -108,17 +128,45 @@ func NewProvider(
 		isMeCache:               cache2.NewNoCache[bool](),
 		signers:                 secondcache.NewTyped[*SignerEntry](50),
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 // RegisterRecipientData stores the passed recipient data in the configured storage.
-func (p *Provider) RegisterRecipientData(ctx context.Context, data *driver.RecipientData) error {
+func (p *Provider) RegisterRecipientData(ctx context.Context, data *driver.RecipientData) (err error) {
+	if p.metrics != nil {
+		p.metrics.Requests.Add(1)
+		p.metrics.InFlight.Add(1)
+		defer p.metrics.InFlight.Add(-1)
+	}
+	start := time.Now()
+	defer func() { p.recordMetrics(start, err) }()
+
+	if p.cb != nil && !p.cb.Allow() {
+		return errors.New("back-pressure: service temporarily overloaded, retry later")
+	}
+
 	return p.storage.StoreIdentityData(ctx, data.Identity, data.AuditInfo, data.TokenMetadata, data.TokenMetadataAuditInfo)
 }
 
 // RegisterSigner registers a Signer and a Verifier for passed identity.
 // This is implemented via an invocation of  RegisterIdentityDescriptor using an IdentityDescriptor with empty AuditInfo.
 // The audit info might or might not be already stored.
-func (p *Provider) RegisterSigner(ctx context.Context, identity driver.Identity, signer driver.Signer, verifier driver.Verifier, signerInfo []byte, ephemeral bool) error {
+func (p *Provider) RegisterSigner(ctx context.Context, identity driver.Identity, signer driver.Signer, verifier driver.Verifier, signerInfo []byte, ephemeral bool) (err error) {
+	if p.metrics != nil {
+		p.metrics.Requests.Add(1)
+		p.metrics.InFlight.Add(1)
+		defer p.metrics.InFlight.Add(-1)
+	}
+	start := time.Now()
+	defer func() { p.recordMetrics(start, err) }()
+
+	if p.cb != nil && !p.cb.Allow() {
+		return errors.New("back-pressure: service temporarily overloaded, retry later")
+	}
+
 	identityDescriptor := &idriver.IdentityDescriptor{
 		Identity:   identity,
 		AuditInfo:  nil,
@@ -134,6 +182,14 @@ func (p *Provider) RegisterSigner(ctx context.Context, identity driver.Identity,
 // AreMe returns the hashes of the passed identities that have a signer registered before.
 // First a local cache is checked, if not found the configured storag is queried.
 func (p *Provider) AreMe(ctx context.Context, identities ...driver.Identity) []string {
+	if p.metrics != nil {
+		p.metrics.Requests.Add(1)
+		p.metrics.InFlight.Add(1)
+		defer p.metrics.InFlight.Add(-1)
+	}
+	start := time.Now()
+	defer func() { p.recordMetrics(start, nil) }()
+
 	p.Logger.DebugfContext(ctx, "identity [%s] is me?", identities)
 
 	result := make([]string, 0)
@@ -162,12 +218,32 @@ func (p *Provider) AreMe(ctx context.Context, identities ...driver.Identity) []s
 
 // IsMe returns true if a signer was ever registered for the passed identity
 func (p *Provider) IsMe(ctx context.Context, identity driver.Identity) bool {
+	if p.metrics != nil {
+		p.metrics.Requests.Add(1)
+		p.metrics.InFlight.Add(1)
+		defer p.metrics.InFlight.Add(-1)
+	}
+	start := time.Now()
+	defer func() { p.recordMetrics(start, nil) }()
+
 	return len(p.AreMe(ctx, identity)) > 0
 }
 
 // GetAuditInfo returns the audit information associated to the passed identity, nil otherwise.
 // The audit info is retrieved from the configured storage.
-func (p *Provider) GetAuditInfo(ctx context.Context, identity driver.Identity) ([]byte, error) {
+func (p *Provider) GetAuditInfo(ctx context.Context, identity driver.Identity) (res []byte, err error) {
+	if p.metrics != nil {
+		p.metrics.Requests.Add(1)
+		p.metrics.InFlight.Add(1)
+		defer p.metrics.InFlight.Add(-1)
+	}
+	start := time.Now()
+	defer func() { p.recordMetrics(start, err) }()
+
+	if p.cb != nil && !p.cb.Allow() {
+		return nil, errors.New("back-pressure: service temporarily overloaded, retry later")
+	}
+
 	return p.storage.GetAuditInfo(ctx, identity)
 }
 
@@ -176,13 +252,25 @@ func (p *Provider) GetAuditInfo(ctx context.Context, identity driver.Identity) (
 // Signers that can be reused are cached.
 // If a signer is not found in cache,
 // this provider tries to construct an instance of driver.Signer that produces valid signatures under that identity.
-func (p *Provider) GetSigner(ctx context.Context, identity driver.Identity) (driver.Signer, error) {
+func (p *Provider) GetSigner(ctx context.Context, identity driver.Identity) (signer driver.Signer, err error) {
+	if p.metrics != nil {
+		p.metrics.Requests.Add(1)
+		p.metrics.InFlight.Add(1)
+		defer p.metrics.InFlight.Add(-1)
+	}
+	start := time.Now()
+	defer func() { p.recordMetrics(start, err) }()
+
+	if p.cb != nil && !p.cb.Allow() {
+		return nil, errors.New("back-pressure: service temporarily overloaded, retry later")
+	}
+
 	found := false
 	idHash := identity.UniqueID()
 	defer func() {
 		p.isMeCache.Add(idHash, found)
 	}()
-	signer, err := p.getSigner(ctx, identity, idHash)
+	signer, err = p.getSigner(ctx, identity, idHash)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get signer for identity [%s], it is neither register nor deserialazable", identity.String())
 	}
@@ -192,22 +280,70 @@ func (p *Provider) GetSigner(ctx context.Context, identity driver.Identity) (dri
 }
 
 // GetEIDAndRH returns both enrollment ID and revocation handle
-func (p *Provider) GetEIDAndRH(ctx context.Context, identity driver.Identity, auditInfo []byte) (string, string, error) {
+func (p *Provider) GetEIDAndRH(ctx context.Context, identity driver.Identity, auditInfo []byte) (eid string, rh string, err error) {
+	if p.metrics != nil {
+		p.metrics.Requests.Add(1)
+		p.metrics.InFlight.Add(1)
+		defer p.metrics.InFlight.Add(-1)
+	}
+	start := time.Now()
+	defer func() { p.recordMetrics(start, err) }()
+
+	if p.cb != nil && !p.cb.Allow() {
+		return "", "", errors.New("back-pressure: service temporarily overloaded, retry later")
+	}
+
 	return p.enrollmentIDUnmarshaler.GetEIDAndRH(ctx, identity, auditInfo)
 }
 
 // GetEnrollmentID extracts the enrollment ID from the passed audit info
-func (p *Provider) GetEnrollmentID(ctx context.Context, identity driver.Identity, auditInfo []byte) (string, error) {
+func (p *Provider) GetEnrollmentID(ctx context.Context, identity driver.Identity, auditInfo []byte) (eid string, err error) {
+	if p.metrics != nil {
+		p.metrics.Requests.Add(1)
+		p.metrics.InFlight.Add(1)
+		defer p.metrics.InFlight.Add(-1)
+	}
+	start := time.Now()
+	defer func() { p.recordMetrics(start, err) }()
+
+	if p.cb != nil && !p.cb.Allow() {
+		return "", errors.New("back-pressure: service temporarily overloaded, retry later")
+	}
+
 	return p.enrollmentIDUnmarshaler.GetEnrollmentID(ctx, identity, auditInfo)
 }
 
 // GetRevocationHandler extracts the revocation handler from the passed audit info
-func (p *Provider) GetRevocationHandler(ctx context.Context, identity driver.Identity, auditInfo []byte) (string, error) {
+func (p *Provider) GetRevocationHandler(ctx context.Context, identity driver.Identity, auditInfo []byte) (rh string, err error) {
+	if p.metrics != nil {
+		p.metrics.Requests.Add(1)
+		p.metrics.InFlight.Add(1)
+		defer p.metrics.InFlight.Add(-1)
+	}
+	start := time.Now()
+	defer func() { p.recordMetrics(start, err) }()
+
+	if p.cb != nil && !p.cb.Allow() {
+		return "", errors.New("back-pressure: service temporarily overloaded, retry later")
+	}
+
 	return p.enrollmentIDUnmarshaler.GetRevocationHandler(ctx, identity, auditInfo)
 }
 
 // Bind binds longTerm to the passed ephemeral identities.
-func (p *Provider) Bind(ctx context.Context, longTerm driver.Identity, ephemeralIdentities ...driver.Identity) error {
+func (p *Provider) Bind(ctx context.Context, longTerm driver.Identity, ephemeralIdentities ...driver.Identity) (err error) {
+	if p.metrics != nil {
+		p.metrics.Requests.Add(1)
+		p.metrics.InFlight.Add(1)
+		defer p.metrics.InFlight.Add(-1)
+	}
+	start := time.Now()
+	defer func() { p.recordMetrics(start, err) }()
+
+	if p.cb != nil && !p.cb.Allow() {
+		return errors.New("back-pressure: service temporarily overloaded, retry later")
+	}
+
 	for _, identity := range ephemeralIdentities {
 		if identity.Equal(longTerm) {
 			// no action required
@@ -222,7 +358,19 @@ func (p *Provider) Bind(ctx context.Context, longTerm driver.Identity, ephemeral
 }
 
 // RegisterRecipientIdentity register the passed identity as a third-party recipient identity.
-func (p *Provider) RegisterRecipientIdentity(ctx context.Context, id driver.Identity) error {
+func (p *Provider) RegisterRecipientIdentity(ctx context.Context, id driver.Identity) (err error) {
+	if p.metrics != nil {
+		p.metrics.Requests.Add(1)
+		p.metrics.InFlight.Add(1)
+		defer p.metrics.InFlight.Add(-1)
+	}
+	start := time.Now()
+	defer func() { p.recordMetrics(start, err) }()
+
+	if p.cb != nil && !p.cb.Allow() {
+		return errors.New("back-pressure: service temporarily overloaded, retry later")
+	}
+
 	p.Logger.DebugfContext(ctx, "Registering identity [%s]", id)
 	p.isMeCache.Add(id.UniqueID(), false)
 
@@ -232,13 +380,33 @@ func (p *Provider) RegisterRecipientIdentity(ctx context.Context, id driver.Iden
 // RollbackPartialRecipientRegistration clears in-memory marks written by
 // RegisterRecipientIdentity when RegisterRecipientData did not complete.
 func (p *Provider) RollbackPartialRecipientRegistration(ctx context.Context, id driver.Identity) {
+	if p.metrics != nil {
+		p.metrics.Requests.Add(1)
+		p.metrics.InFlight.Add(1)
+		defer p.metrics.InFlight.Add(-1)
+	}
+	start := time.Now()
+	defer func() { p.recordMetrics(start, nil) }()
+
 	p.Logger.DebugfContext(ctx, "rolling back partial recipient registration for identity [%s]", id)
 	p.isMeCache.Delete(id.UniqueID())
 }
 
 // RegisterIdentityDescriptor stores the given identity descriptor in the configured storage.
 // If alias is not nil, the alias can be used as an alternative to `idriver.IdentityDescriptor#Identity`.
-func (p *Provider) RegisterIdentityDescriptor(ctx context.Context, identityDescriptor *idriver.IdentityDescriptor, alias driver.Identity) error {
+func (p *Provider) RegisterIdentityDescriptor(ctx context.Context, identityDescriptor *idriver.IdentityDescriptor, alias driver.Identity) (err error) {
+	if p.metrics != nil {
+		p.metrics.Requests.Add(1)
+		p.metrics.InFlight.Add(1)
+		defer p.metrics.InFlight.Add(-1)
+	}
+	start := time.Now()
+	defer func() { p.recordMetrics(start, err) }()
+
+	if p.cb != nil && !p.cb.Allow() {
+		return errors.New("back-pressure: service temporarily overloaded, retry later")
+	}
+
 	// register in the Storage
 	if !identityDescriptor.Ephemeral {
 		if err := p.storage.RegisterIdentityDescriptor(ctx, identityDescriptor, alias); err != nil {
@@ -252,6 +420,22 @@ func (p *Provider) RegisterIdentityDescriptor(ctx context.Context, identityDescr
 	p.Logger.DebugfContext(ctx, "update identity provider caches...done")
 
 	return nil
+}
+
+func (p *Provider) recordMetrics(start time.Time, err error) {
+	if p.metrics != nil {
+		p.metrics.Latency.Observe(float64(time.Since(start).Milliseconds()))
+		if err != nil {
+			p.metrics.Errors.Add(1)
+		}
+	}
+	if p.cb != nil {
+		if err != nil {
+			p.cb.RecordFailure()
+		} else {
+			p.cb.RecordSuccess()
+		}
+	}
 }
 
 func (p *Provider) areMe(ctx context.Context, identities ...driver.Identity) []string {
