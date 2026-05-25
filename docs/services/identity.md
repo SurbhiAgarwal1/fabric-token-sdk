@@ -191,6 +191,11 @@ The cryptographic materials are stored in standard PEM format. By default, the d
 ###### Custom Key Store Directory
 While `keystore` is the default directory name for the private key, a custom keystore directory name can be passed as an argument when initializing the key manager (e.g. to load `priv_sk` from `<dir>/<custom-keystore-name>/priv_sk`).
 
+###### Directory Path Fallback
+To accommodate different deployment structures, the Key Manager performs directory resolution using a fallback strategy:
+1. It first attempts to load the files directly from the configured directory (`<dir>`).
+2. If this fails, it appends an extra `msp` path element to the directory (i.e., `<dir>/msp/`) and tries again (e.g. searching for `<dir>/msp/signcerts` and `<dir>/msp/keystore`).
+
 #### 2. Idemix (Identity Mixer)
 Advanced identity encryption based on Zero-Knowledge Proofs (ZKP).
 *   **Identity (Payload)**: A **full Idemix signature** acting as a commitment to the user's attributes. It is encoded as a Protobuf `SerializedIdemixIdentity` message.
