@@ -8,6 +8,8 @@ package bulletproof
 
 import (
 	mathlib "github.com/IBM/mathlib"
+	bls12381fr "github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
+	bn254fr "github.com/consensys/gnark-crypto/ecc/bn254/fr"
 	"github.com/hyperledger-labs/fabric-smart-client/pkg/utils/errors"
 	"github.com/hyperledger-labs/fabric-token-sdk/token/core/common/encoding/asn1"
 	"github.com/hyperledger-labs/fabric-token-sdk/token/core/zkatdlog/nogh/v1/crypto/common"
@@ -81,10 +83,10 @@ func (ipa *IPA) Validate(curve mathlib.CurveID) error {
 	if ipa.R == nil {
 		return errors.New("invalid IPA proof: nil R")
 	}
-	if err := math.CheckZrElements(ipa.L, curve, uint64(len(ipa.L))); err != nil {
+	if err := math.CheckElements(ipa.L, curve, uint64(len(ipa.L))); err != nil {
 		return errors.Wrapf(err, "invalid IPA proof: invalid L elements")
 	}
-	if err := math.CheckZrElements(ipa.R, curve, uint64(len(ipa.R))); err != nil {
+	if err := math.CheckElements(ipa.R, curve, uint64(len(ipa.R))); err != nil {
 		return errors.Wrapf(err, "invalid IPA proof: invalid R elements")
 	}
 
@@ -184,6 +186,13 @@ func (p *ipaProver) Prove() (*IPA, error) {
 // of the left vector and right is a function of right vector.
 // Both vectors are committed in com which is passed as a parameter to reduce
 func (p *ipaProver) reduce(X, com *mathlib.G1) (*mathlib.Zr, *mathlib.Zr, []*mathlib.G1, []*mathlib.G1, error) {
+	isBLS, isBN254 := math.DispatchCurve(p.Curve)
+	if isBLS {
+		return nativeIPAReduce[bls12381fr.Element, *bls12381fr.Element](p, X, com)
+	} else if isBN254 {
+		return nativeIPAReduce[bn254fr.Element, *bn254fr.Element](p, X, com)
+	}
+
 	left := p.leftVector
 	right := p.rightVector
 
@@ -392,7 +401,7 @@ func (v *ipaVerifier) Verify(proof *IPA) error {
 	generators := make([]*mathlib.G1, len(leftGen)+len(rightGen)+len(proof.L)+len(proof.R)+1)
 	scalars := make([]*mathlib.Zr, len(generators))
 	s, sInv := ComputeSVector(1<<v.NumberOfRounds, xList, v.Curve)
-	for i := 0; i < len(s); i++ {
+	for i := range s {
 		s[i] = v.Curve.ModMul(s[i], proof.Left, v.Curve.GroupOrder)
 		sInv[i] = v.Curve.ModMul(sInv[i], proof.Right, v.Curve.GroupOrder)
 	}
